@@ -20,7 +20,12 @@ from fpdf import FPDF
 import os
 from io import BytesIO
 import tempfile
-import moviepy.editor as mp
+try:
+    import moviepy.editor as mp
+    _MOVIEPY_AVAILABLE = True
+except Exception:
+    mp = None
+    _MOVIEPY_AVAILABLE = False
 
 # --------------------
 # 2) Tiny contract / assumptions
@@ -64,6 +69,13 @@ def get_whisper_model(model_name: str = "small"):
 # 4) Upload Audio/Video
 # --------------------
 uploaded_file = st.file_uploader("Upload Meeting Audio/Video (mp3/wav/mp4)", type=["mp3", "wav", "mp4"]) 
+
+# If moviepy isn't available on the host or the user prefers local conversion,
+# show a short ffmpeg command to extract audio locally before upload.
+with st.expander("Need to convert mp4 to wav locally? \n(Click to expand)"):
+    st.markdown("If you can't upload mp4 or don't want to install `moviepy` on the server, extract audio locally with ffmpeg:")
+    st.code("ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 output.wav", language='bash')
+    st.markdown("Then upload `output.wav` instead of the mp4. This avoids server-side video processing and is faster for large files.")
 if uploaded_file:
     # Use TemporaryDirectory so files are cleaned up automatically
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -73,6 +85,11 @@ if uploaded_file:
 
         # If video, extract audio
         if uploaded_file.name.lower().endswith(".mp4"):
+            if not _MOVIEPY_AVAILABLE:
+                st.error("Video processing (mp4 -> audio) requires the 'moviepy' package which is not available in this environment.")
+                st.info("Please upload an audio file (wav/mp3) instead or install 'moviepy' in your deployment environment.")
+                st.stop()
+
             st.info("Extracting audio from video...")
             try:
                 clip = mp.VideoFileClip(temp_file_path)

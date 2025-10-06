@@ -32,6 +32,14 @@ pip install -r requirements.txt
 choco install ffmpeg
 ```
 
+If you prefer to convert video to audio locally (to avoid uploading large mp4 files or installing `moviepy` on the server), run:
+
+```powershell
+ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 output.wav
+```
+
+Then upload `output.wav` to the app instead of the mp4.
+
 4. (Optional) If you need access to private Hugging Face models, set your HF token as an environment variable:
 
 ```powershell
