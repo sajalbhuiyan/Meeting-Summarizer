@@ -61,19 +61,27 @@ def load_diarization_pipeline():
         # import pyannote lazily to avoid import-time crashes when it's not installed
         try:
             from pyannote.audio import Pipeline
-        except Exception as e:
-            return e
+        except Exception:
+            return "pyannote.audio not installed"
 
-        if hf_token:
-            # ensure environment is set for downstream libs
-            os.environ['HF_API_TOKEN'] = hf_token
-            os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
-            return Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=hf_token)
-        else:
-            return Pipeline.from_pretrained("pyannote/speaker-diarization")
+        try:
+            if hf_token:
+                # ensure environment is set for downstream libs
+                os.environ['HF_API_TOKEN'] = hf_token
+                os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
+                return Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=hf_token)
+            else:
+                return Pipeline.from_pretrained("pyannote/speaker-diarization")
+        except Exception as e:
+            # Normalize common gated/model access errors to a clean string so callers can detect and prompt for auth
+            name = type(e).__name__
+            msg = str(e) or repr(e)
+            if 'gated' in msg.lower() or '401' in msg or 'not authorized' in msg.lower() or 'access' in msg.lower():
+                return f"{name}: access to 'pyannote/speaker-diarization' appears restricted or requires authentication ({msg})"
+            return f"{name}: {msg}"
     except Exception as e:
-        # Return the exception so caller can decide to show auth UI or fallback
-        return e
+        # Return a plain string for the error
+        return f"{type(e).__name__}: {str(e)}"
 
 @st.cache_resource
 def load_sentiment_pipeline():
@@ -230,11 +238,11 @@ if uploaded_file:
                 st.info("If you're using a private model, ensure HF_TOKEN is set as an environment variable and you have access to 'pyannote/speaker-diarization'.")
                 st.stop()
 
-            # If model loading returned an Exception, allow HF token retry or fallback
-            if isinstance(model, Exception):
-                err_msg = str(model)
-                if 'restricted' in err_msg.lower() or 'authenticated' in err_msg.lower() or '401' in err_msg:
-                    st.error("Error loading diarization model: access to 'pyannote/speaker-diarization' is restricted.")
+            # If model loading returned an error string, allow HF token retry or fallback
+            if isinstance(model, str):
+                err_msg = model
+                if 'access' in err_msg.lower() or 'gated' in err_msg.lower() or '401' in err_msg:
+                    st.error("Error loading diarization model: access to 'pyannote/speaker-diarization' is restricted or requires authentication.")
                     st.info("If you have access to this model, paste a Hugging Face access token below to authenticate for this session.")
                     hf_token = st.text_input("Hugging Face token (write-only)", type="password")
                     if st.button("Authenticate and reload diarization model"):
@@ -247,9 +255,11 @@ if uploaded_file:
                                 with st.spinner("Reloading diarization model with provided token..."):
                                     # reuse the cached loader which handles lazy imports
                                     model = load_diarization_pipeline()
-                                if isinstance(model, Exception):
-                                    raise model
-                                st.success("Diarization model loaded successfully.")
+                                if isinstance(model, str):
+                                    # still an error
+                                    st.error(f"Failed to load diarization model after authentication: {model}")
+                                else:
+                                    st.success("Diarization model loaded successfully.")
                             except Exception as e:
                                 st.error(f"Failed to load diarization model after authentication: {e}")
                                 # fall through to allow fallback option below
