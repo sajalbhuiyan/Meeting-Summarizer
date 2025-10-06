@@ -1,0 +1,7 @@
+streamlit
+pydub
+SpeechRecognition
+pandas
+
+# Optional (for mp4 extraction):
+# ffmpeg binary must be installed on the host and on PATH
