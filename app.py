@@ -28,6 +28,10 @@ except Exception:
     mp = None
     _MOVIEPY_AVAILABLE = False
 
+# detect ffmpeg binary on PATH early
+import shutil
+_FFMPEG_AVAILABLE = shutil.which('ffmpeg') is not None
+
 # --------------------
 # 2) Tiny contract / assumptions
 # --------------------
@@ -69,7 +73,21 @@ def get_whisper_model(model_name: str = "small"):
 # --------------------
 # 4) Upload Audio/Video
 # --------------------
-uploaded_file = st.file_uploader("Upload Meeting Audio/Video (mp3/wav/mp4)", type=["mp3", "wav", "mp4"]) 
+# If server lacks both moviepy and ffmpeg, disallow mp4 to avoid confusion
+allowed_types = ["mp3", "wav", "mp4"] if (_MOVIEPY_AVAILABLE or _FFMPEG_AVAILABLE) else ["mp3", "wav"]
+uploaded_file = st.file_uploader("Upload Meeting Audio/Video (mp3/wav/mp4)", type=allowed_types)
+
+if not (_MOVIEPY_AVAILABLE or _FFMPEG_AVAILABLE):
+    st.warning("Server-side mp4 → wav conversion is not available (moviepy and ffmpeg missing). Use the browser converter below or upload an audio file (wav/mp3). See the Troubleshooting panel for fixes.")
+
+with st.expander("Troubleshooting: Missing server dependencies"):
+    st.write("Status:")
+    st.write(f"moviepy installed: {_MOVIEPY_AVAILABLE}")
+    st.write(f"ffmpeg on PATH: {_FFMPEG_AVAILABLE}")
+    st.markdown("\nHow to fix on common hosts:")
+    st.markdown("- Streamlit Community Cloud: add `ffmpeg` to a file named `packages.txt` in the repo root and ensure `moviepy` is in `requirements.txt`. See Streamlit docs.")
+    st.markdown("- Docker: apt-get install ffmpeg in your Dockerfile (or include ffmpeg binary).")
+    st.markdown("- Local: `choco install ffmpeg` (Windows) or `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Ubuntu).")
 
 # If moviepy isn't available on the host or the user prefers local conversion,
 # show a short ffmpeg command to extract audio locally before upload.
