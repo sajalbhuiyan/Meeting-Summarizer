@@ -1,0 +1,13 @@
+streamlit
+pyannote.audio
+speechrecognition
+pydub
+transformers
+pandas
+plotly
+matplotlib
+wordcloud
+fpdf
+moviepy
+openai-whisper
+# Note: openai-whisper depends on PyTorch. On Windows install a compatible PyTorch wheel first (see README.md).
