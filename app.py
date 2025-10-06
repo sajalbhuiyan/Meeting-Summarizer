@@ -11,6 +11,7 @@ from pyannote.audio import Pipeline
 from pydub import AudioSegment
 from transformers import pipeline as hf_pipeline
 from utils import load_whisper_model, transcribe_audiosegment
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import matplotlib.pyplot as plt
@@ -76,6 +77,52 @@ with st.expander("Need to convert mp4 to wav locally? \n(Click to expand)"):
     st.markdown("If you can't upload mp4 or don't want to install `moviepy` on the server, extract audio locally with ffmpeg:")
     st.code("ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 output.wav", language='bash')
     st.markdown("Then upload `output.wav` instead of the mp4. This avoids server-side video processing and is faster for large files.")
+    st.markdown("---")
+    st.markdown(
+        "Or convert the mp4 to wav directly in your browser (no server deps). This uses ffmpeg.wasm and runs entirely in your browser; the converted file is downloadable locally and you can then upload it to the app."
+    )
+
+    ffmpeg_html = r'''
+<div>
+  <input id="u" type="file" accept="video/*" />
+  <button id="c">Convert to WAV</button>
+  <div id="status"></div>
+  <a id="dl" style="display:none">Download WAV</a>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.9/dist/ffmpeg.min.js"></script>
+<script>
+const { createFFmpeg, fetchFile } = FFmpeg;
+const ffmpeg = createFFmpeg({ log: true });
+const input = document.getElementById('u');
+const btn = document.getElementById('c');
+const status = document.getElementById('status');
+const dl = document.getElementById('dl');
+
+btn.onclick = async () => {
+  if (!input.files.length) { alert('Select a video file first'); return; }
+  const file = input.files[0];
+  status.innerText = 'Loading ffmpeg (this may take a few seconds)...';
+  if (!ffmpeg.isLoaded()) await ffmpeg.load();
+  status.innerText = 'Converting...';
+  const name = 'input.' + file.name.split('.').pop();
+  ffmpeg.FS('writeFile', name, await fetchFile(file));
+  try {
+    await ffmpeg.run('-i', name, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', 'output.wav');
+    const data = ffmpeg.FS('readFile', 'output.wav');
+    const blob = new Blob([data.buffer], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    dl.href = url;
+    dl.download = file.name.replace(/\.\w+$/, '') + '.wav';
+    dl.style.display = 'inline-block';
+    dl.innerText = 'Download converted WAV';
+    status.innerText = 'Conversion complete.';
+  } catch (err) {
+    status.innerText = 'Conversion failed: ' + err.message;
+  }
+};
+</script>
+'''
+    components.html(ffmpeg_html, height=300)
 if uploaded_file:
     # Use TemporaryDirectory so files are cleaned up automatically
     with tempfile.TemporaryDirectory() as temp_dir:
