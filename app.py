@@ -274,17 +274,22 @@ if uploaded_file:
 
             # If model loaded successfully and no fallback chosen, run the model
             if speaker_segments is None:
-                try:
-                    diarization = model(temp_file_path)
-                    speaker_segments = []
-                    for turn, _, speaker in diarization.itertracks(yield_label=True):
-                        speaker_segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
-                except Exception as e:
-                    st.error(f"Diarization failed: {e}")
-                    if st.button("Use simple fallback diarization now"):
-                        speaker_segments = simple_diarize_file(temp_file_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
-                    else:
-                        st.stop()
+                # If model is an error string (not available), use the simple fallback automatically to keep UX simple
+                if isinstance(model, str):
+                    st.info("Diarization model unavailable — using simple silence-based fallback diarization.")
+                    speaker_segments = simple_diarize_file(temp_file_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
+                else:
+                    try:
+                        diarization = model(temp_file_path)
+                        speaker_segments = []
+                        for turn, _, speaker in diarization.itertracks(yield_label=True):
+                            speaker_segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+                    except Exception as e:
+                        st.error(f"Diarization failed: {e}")
+                        if st.button("Use simple fallback diarization now"):
+                            speaker_segments = simple_diarize_file(temp_file_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
+                        else:
+                            st.stop()
 
         if not speaker_segments:
             st.warning("No speaker segments found.")
