@@ -55,13 +55,25 @@ with tempfile.TemporaryDirectory() as td:
 
     st.audio(input_path)
 
-    st.header("🔊 Speaker Segmentation (simple)")
+    st.header("🔊 Speaker Segmentation")
     min_silence_len = st.number_input("Min silence length (ms)", value=700, min_value=100, max_value=5000)
     silence_thresh = st.slider("Silence threshold (dBFS)", -80, -10, -40)
     max_speakers = st.number_input("Max speakers (fallback)", min_value=1, max_value=10, value=4)
 
-    with st.spinner("Detecting speaker segments (simple silence-based)..."):
-        segments = simple_diarize_file(input_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
+    with st.spinner("Detecting speaker segments..."):
+        segments = None
+        # Try public pyannote if available (no token required); fall back to simple diarization if not
+        try:
+            from pyannote.audio import Pipeline
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
+            diarization = pipeline(input_path)
+            segments = []
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+            st.info("Using pyannote diarization (public)")
+        except Exception:
+            # silently fallback to simple diarization for simplicity
+            segments = simple_diarize_file(input_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
 
     if not segments:
         st.warning("No segments detected. Try loosening silence threshold or uploading clearer audio.")
