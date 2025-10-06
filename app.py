@@ -7,17 +7,12 @@
 # 1) Imports
 # --------------------
 import streamlit as st
-from pyannote.audio import Pipeline
-from pydub import AudioSegment
-from transformers import pipeline as hf_pipeline
 from utils import load_whisper_model, transcribe_audiosegment, simple_diarize_file
 import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud, STOPWORDS
 from collections import Counter
-from fpdf import FPDF
 import os
 from io import BytesIO
 import tempfile
@@ -63,6 +58,12 @@ def load_diarization_pipeline():
             # ignore accessing secrets if not available
             pass
 
+        # import pyannote lazily to avoid import-time crashes when it's not installed
+        try:
+            from pyannote.audio import Pipeline
+        except Exception as e:
+            return e
+
         if hf_token:
             # ensure environment is set for downstream libs
             os.environ['HF_API_TOKEN'] = hf_token
@@ -77,6 +78,11 @@ def load_diarization_pipeline():
 @st.cache_resource
 def load_sentiment_pipeline():
     try:
+        # import transformers pipeline lazily
+        try:
+            from transformers import pipeline as hf_pipeline
+        except Exception as e:
+            return e
         return hf_pipeline("sentiment-analysis")
     except Exception as e:
         return e
@@ -239,7 +245,10 @@ if uploaded_file:
                             os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
                             try:
                                 with st.spinner("Reloading diarization model with provided token..."):
-                                    model = Pipeline.from_pretrained("pyannote/speaker-diarization")
+                                    # reuse the cached loader which handles lazy imports
+                                    model = load_diarization_pipeline()
+                                if isinstance(model, Exception):
+                                    raise model
                                 st.success("Diarization model loaded successfully.")
                             except Exception as e:
                                 st.error(f"Failed to load diarization model after authentication: {e}")
@@ -289,6 +298,13 @@ if uploaded_file:
                     st.error(f"Failed to load Whisper model: {whisper_model}")
                     st.info("Falling back to Google backend")
                     backend = "google"
+
+        # load audio using pydub lazily so the app can import without pydub installed
+        try:
+            from pydub import AudioSegment
+        except Exception as e:
+            st.error("pydub is required to load audio files. Install it with: pip install pydub and ensure ffmpeg is available on PATH.")
+            st.stop()
 
         try:
             audio = AudioSegment.from_file(temp_file_path)
@@ -365,20 +381,34 @@ if uploaded_file:
         # --------------------
         st.subheader("🔑 Top Keywords per Speaker")
         top_keywords = {}
+        # attempt to import wordcloud lazily; if unavailable, show keywords as text
+        try:
+            from wordcloud import WordCloud, STOPWORDS
+            _WORDCLOUD_AVAILABLE = True
+        except Exception:
+            _WORDCLOUD_AVAILABLE = False
+
         for speaker, group in df_transcript.groupby('speaker'):
             words = " ".join(group['text'].tolist()).lower().split()
             # remove common stopwords + tiny words (clean token first)
             cleaned = [w.strip('.,!?()[]"\'').lower() for w in words]
-            filtered = [w for w in cleaned if len(w) > 3 and w not in STOPWORDS]
+            if _WORDCLOUD_AVAILABLE:
+                filtered = [w for w in cleaned if len(w) > 3 and w not in STOPWORDS]
+            else:
+                filtered = [w for w in cleaned if len(w) > 3]
+
             top_keywords[speaker] = dict(Counter(filtered).most_common(10))
-            # display wordcloud
+            # display wordcloud if available, otherwise print keywords
             if top_keywords[speaker]:
-                wordcloud = WordCloud(width=800, height=400, background_color='white').generate_from_frequencies(top_keywords[speaker])
-                plt.figure(figsize=(8,4))
-                plt.imshow(wordcloud, interpolation='bilinear')
-                plt.axis('off')
-                st.pyplot(plt)
-                plt.close()
+                if _WORDCLOUD_AVAILABLE:
+                    wordcloud = WordCloud(width=800, height=400, background_color='white').generate_from_frequencies(top_keywords[speaker])
+                    plt.figure(figsize=(8,4))
+                    plt.imshow(wordcloud, interpolation='bilinear')
+                    plt.axis('off')
+                    st.pyplot(plt)
+                    plt.close()
+                else:
+                    st.write(f"Top keywords for {speaker}: {list(top_keywords[speaker].keys())}")
             else:
                 st.write(f"No keywords found for {speaker}")
 
@@ -394,6 +424,12 @@ if uploaded_file:
         # --------------------
         st.subheader("📄 Download PDF Report")
         if st.button("Generate PDF Report"):
+            try:
+                from fpdf import FPDF
+            except Exception:
+                st.error("PDF generation requires fpdf. Install it with: pip install fpdf2")
+                st.stop()
+
             pdf = FPDF()
             pdf.set_auto_page_break(auto=True, margin=15)
             pdf.add_page()
