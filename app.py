@@ -85,20 +85,36 @@ if uploaded_file:
 
         # If video, extract audio
         if uploaded_file.name.lower().endswith(".mp4"):
-            if not _MOVIEPY_AVAILABLE:
-                st.error("Video processing (mp4 -> audio) requires the 'moviepy' package which is not available in this environment.")
-                st.info("Please upload an audio file (wav/mp3) instead or install 'moviepy' in your deployment environment.")
-                st.stop()
-
-            st.info("Extracting audio from video...")
-            try:
-                clip = mp.VideoFileClip(temp_file_path)
-                audio_path = os.path.join(temp_dir, "extracted_audio.wav")
-                clip.audio.write_audiofile(audio_path, logger=None)
-                temp_file_path = audio_path
-            except Exception as e:
-                st.error(f"Failed to extract audio from video: {e}")
-                st.stop()
+            # Prefer moviepy if available
+            if _MOVIEPY_AVAILABLE:
+                st.info("Extracting audio from video (moviepy)...")
+                try:
+                    clip = mp.VideoFileClip(temp_file_path)
+                    audio_path = os.path.join(temp_dir, "extracted_audio.wav")
+                    clip.audio.write_audiofile(audio_path, logger=None)
+                    temp_file_path = audio_path
+                except Exception as e:
+                    st.error(f"Failed to extract audio from video using moviepy: {e}")
+                    st.stop()
+            else:
+                # Try ffmpeg CLI if available on PATH
+                import shutil, subprocess
+                ffmpeg_path = shutil.which('ffmpeg')
+                if ffmpeg_path:
+                    st.info("Extracting audio from video using ffmpeg on the server...")
+                    audio_path = os.path.join(temp_dir, "extracted_audio.wav")
+                    cmd = [ffmpeg_path, '-y', '-i', temp_file_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', audio_path]
+                    try:
+                        with st.spinner('Running ffmpeg...'):
+                            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        temp_file_path = audio_path
+                    except subprocess.CalledProcessError as e:
+                        st.error(f"ffmpeg failed to extract audio: {e}")
+                        st.stop()
+                else:
+                    st.error("Video processing (mp4 -> audio) requires either the 'moviepy' package or the 'ffmpeg' binary on PATH. Neither is available in this environment.")
+                    st.info("Please upload an audio file (wav/mp3) instead or install 'moviepy' or 'ffmpeg' in your deployment environment.")
+                    st.stop()
 
         st.audio(temp_file_path, format='audio/wav')
         st.success("File ready for processing!")
