@@ -69,7 +69,8 @@ def load_diarization_pipeline():
                 # ensure environment is set for downstream libs
                 os.environ['HF_API_TOKEN'] = hf_token
                 os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
-                return Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=hf_token)
+                # Some pyannote/hf versions accept use_auth_token, others read env vars; set env and call without the kwarg
+                return Pipeline.from_pretrained("pyannote/speaker-diarization")
             else:
                 return Pipeline.from_pretrained("pyannote/speaker-diarization")
         except Exception as e:
