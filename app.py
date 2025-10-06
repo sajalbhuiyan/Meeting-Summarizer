@@ -10,7 +10,7 @@ import streamlit as st
 from pyannote.audio import Pipeline
 from pydub import AudioSegment
 from transformers import pipeline as hf_pipeline
-from utils import load_whisper_model, transcribe_audiosegment
+from utils import load_whisper_model, transcribe_audiosegment, simple_diarize_file
 import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
@@ -51,9 +51,27 @@ st.title("🎙️ AI-Powered Meeting Summarizer & Analytics (Improved)")
 @st.cache_resource
 def load_diarization_pipeline():
     try:
-        return Pipeline.from_pretrained("pyannote/speaker-diarization")
+        # Prefer explicit tokens from environment or Streamlit secrets
+        hf_token = os.environ.get('HF_API_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN')
+        # If running on Streamlit Cloud, tokens may be in st.secrets
+        try:
+            if not hf_token and hasattr(st, 'secrets') and st.secrets.get('HF_API_TOKEN'):
+                hf_token = st.secrets.get('HF_API_TOKEN')
+            if not hf_token and hasattr(st, 'secrets') and st.secrets.get('HUGGINGFACE_HUB_TOKEN'):
+                hf_token = st.secrets.get('HUGGINGFACE_HUB_TOKEN')
+        except Exception:
+            # ignore accessing secrets if not available
+            pass
+
+        if hf_token:
+            # ensure environment is set for downstream libs
+            os.environ['HF_API_TOKEN'] = hf_token
+            os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
+            return Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=hf_token)
+        else:
+            return Pipeline.from_pretrained("pyannote/speaker-diarization")
     except Exception as e:
-        # Return None and surface message where used
+        # Return the exception so caller can decide to show auth UI or fallback
         return e
 
 @st.cache_resource
@@ -184,28 +202,69 @@ if uploaded_file:
         st.audio(temp_file_path, format='audio/wav')
         st.success("File ready for processing!")
 
+
         # --------------------
         # 5) Multi-Speaker Diarization
         # --------------------
         st.subheader("🔊 Speaker Segmentation")
+        # Fallback diarization parameters (tweak if pyannote is unavailable)
+        st.markdown("**Fallback diarization parameters (for silence-based fallback):**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            min_silence_len = st.number_input("Min silence length (ms)", min_value=100, max_value=5000, value=700, step=50)
+        with col2:
+            silence_thresh = st.slider("Silence threshold (dBFS)", min_value=-80, max_value=-10, value=-40)
+        with col3:
+            max_speakers = st.number_input("Max speakers (fallback)", min_value=1, max_value=20, value=4, step=1)
+        speaker_segments = None
         with st.spinner("Performing speaker diarization..."):
             model = load_diarization_pipeline()
             if model is None:
                 st.error("Failed to load diarization model")
                 st.info("If you're using a private model, ensure HF_TOKEN is set as an environment variable and you have access to 'pyannote/speaker-diarization'.")
                 st.stop()
-            elif isinstance(model, Exception):
-                st.error(f"Error loading diarization model: {model}")
-                st.stop()
-            try:
-                diarization = model(temp_file_path)
-            except Exception as e:
-                st.error(f"Diarization failed: {e}")
-                st.stop()
 
-        speaker_segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            speaker_segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+            # If model loading returned an Exception, allow HF token retry or fallback
+            if isinstance(model, Exception):
+                err_msg = str(model)
+                if 'restricted' in err_msg.lower() or 'authenticated' in err_msg.lower() or '401' in err_msg:
+                    st.error("Error loading diarization model: access to 'pyannote/speaker-diarization' is restricted.")
+                    st.info("If you have access to this model, paste a Hugging Face access token below to authenticate for this session.")
+                    hf_token = st.text_input("Hugging Face token (write-only)", type="password")
+                    if st.button("Authenticate and reload diarization model"):
+                        if not hf_token:
+                            st.warning("Please provide a valid token.")
+                        else:
+                            os.environ['HF_API_TOKEN'] = hf_token
+                            os.environ['HUGGINGFACE_HUB_TOKEN'] = hf_token
+                            try:
+                                with st.spinner("Reloading diarization model with provided token..."):
+                                    model = Pipeline.from_pretrained("pyannote/speaker-diarization")
+                                st.success("Diarization model loaded successfully.")
+                            except Exception as e:
+                                st.error(f"Failed to load diarization model after authentication: {e}")
+                                # fall through to allow fallback option below
+
+                    # offer simple fallback diarization choice
+                    if st.checkbox("Use simple silence-based fallback diarization instead of pyannote (less accurate)"):
+                        speaker_segments = simple_diarize_file(temp_file_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
+                else:
+                    st.error(f"Error loading diarization model: {model}")
+                    st.stop()
+
+            # If model loaded successfully and no fallback chosen, run the model
+            if speaker_segments is None:
+                try:
+                    diarization = model(temp_file_path)
+                    speaker_segments = []
+                    for turn, _, speaker in diarization.itertracks(yield_label=True):
+                        speaker_segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+                except Exception as e:
+                    st.error(f"Diarization failed: {e}")
+                    if st.button("Use simple fallback diarization now"):
+                        speaker_segments = simple_diarize_file(temp_file_path, min_silence_len=min_silence_len, silence_thresh=silence_thresh, max_speakers=max_speakers)
+                    else:
+                        st.stop()
 
         if not speaker_segments:
             st.warning("No speaker segments found.")
